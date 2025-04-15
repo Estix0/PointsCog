@@ -86,7 +86,7 @@ class Points(commands.Cog):
     async def commands_list(self, ctx):
         """List all available user commands."""
         command_descriptions = {
-            "faq": "Use **!p FAQ**, aby uzyskać link do google doc'a z FAQ.",
+            "faq": "Use **!p FAQ**, to get a link to the Google Doc with the FAQ.",
             "balance": "Check your current amount of points.",
             "rewards": "Display available rewards.",
             "redeem": "Claim a reward using the command **!p redeem [REWARD NAME]**.",
