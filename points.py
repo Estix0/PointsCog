@@ -11,69 +11,97 @@ class Points(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=2137020405)
-        self.config.register_member(points=0,
-                                    rewards={}
-        )
-        self.config.register_guild(reward_channel=None, tiers={})
+        self.config.register_member(points=0, weeklypoints=0, rewards={})
+        self.config.register_guild(reward_channel=None, weekly_channel=None, tiers={})
         self.message_cooldown = {}  # Tracks message cooldowns
         self.active_voice_users = {}  # Tracks active voice users
-        self.default_guild_id =   # Replace with a specific default server ID
+        self.voice_loop_task = self.bot.loop.create_task(self.voice_points_loop())
+        self.default_guild_id =   # Replace with your server ID
 
     def guild_find(self, ctx):
-        """Returns the guild ID or a default ID for DM messages."""
-        return ctx.guild if ctx.guild else self.bot.get_guild(self.default_guild_id)    
+        return ctx.guild if ctx.guild else self.bot.get_guild(self.default_guild_id)
+    
+    async def _post_weekly_leaderboards_and_reset(self):
+        for guild in self.bot.guilds:
+            members = [m for m in guild.members if not m.bot]
+            points_data = [(m, await self.config.member(m).weeklypoints()) for m in members]
+            sorted_members = sorted(points_data, key=lambda x: x[1], reverse=True)[:10]
+
+            leaderboard_text = "\n".join(
+                [f"**{i+1}. {m[0].display_name}** {m[1]} points" for i, m in enumerate(sorted_members)]
+            ) or "No Data."
+
+            weekly_channel_id = await self.config.guild(guild).weekly_channel()
+            if weekly_channel_id:
+                channel = self.bot.get_channel(weekly_channel_id)
+                if channel:
+                    embed = discord.Embed(
+                        title="Weekly Activity Leaderboard",
+                        description=leaderboard_text,
+                        color=discord.Color.blue()
+                    )
+                    await channel.send(embed=embed)
+
+            for member in members:
+                await self.config.member(member).weeklypoints.set(0)
 
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
             return
-        
         author_id = message.author.id
         if author_id in self.message_cooldown:
-            return  # Enforce cooldown
-        
+            return
         current_points = await self.config.member(message.author).points()
+        weekly_points = await self.config.member(message.author).weeklypoints()
         await self.config.member(message.author).points.set(current_points + 3)
+        await self.config.member(message.author).weeklypoints.set(weekly_points + 3)
         self.message_cooldown[author_id] = True
-        await asyncio.sleep(60)  # 1-minute cooldown
+        await asyncio.sleep(60)
         self.message_cooldown.pop(author_id, None)
 
-
-    active_voice_users = defaultdict(bool)  # Tracks users currently earning points
+    active_voice_users = defaultdict(bool)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         if member.bot:
             return
-        
-        # User leaves VC or gets deafened → Stop tracking
+
         if after.channel is None or after.self_deaf:
             self.active_voice_users.pop(member.id, None)
-            return
-        
-        # User joins VC or undeafens → Start tracking if not already
-        if member.id not in self.active_voice_users:
-            self.active_voice_users[member.id] = True
-            await self.grant_voice_points(member)
+        else:
+            self.active_voice_users[member.id] = member  # Store the full member object
 
-    async def grant_voice_points(self, member):
-        """Grants points every minute while the user remains valid."""
-        while member.id in self.active_voice_users:
-            # Stop if user leaves VC or gets deafened
-            if not member.voice or member.voice.self_deaf:
-                self.active_voice_users.pop(member.id, None)
-                break
-            
-            current_points = await self.config.member(member).points()
-            await self.config.member(member).points.set(current_points + 1)
-            await asyncio.sleep(60)  # Wait a minute before next award
+    async def voice_points_loop(self):
+        await self.bot.wait_until_ready()
+        while True:
+            to_remove = []
+            for member_id, member in self.active_voice_users.items():
+                if not member.voice or member.voice.self_deaf:
+                    to_remove.append(member_id)
+                    continue
+                # Grant points
+                points = await self.config.member(member).points()
+                weekly = await self.config.member(member).weeklypoints()
+                await self.config.member(member).points.set(points + 1)
+                await self.config.member(member).weeklypoints.set(weekly + 1)
 
+            # Clean up inactive users
+            for member_id in to_remove:
+                self.active_voice_users.pop(member_id, None)
 
+            await asyncio.sleep(60)
     @commands.group(name="points", aliases=["p"])
     async def points(self, ctx):
         """Base command for the rewards system."""
         if ctx.invoked_subcommand is None:
             await ctx.send("Use !points [commands].")
+
+    @commands.admin_or_permissions(manage_guild=True)
+    @points.command(name="ResetWeekly", aliases=["resetweekly"])
+    async def testweeklyreset(self,ctx):
+        """Reset weekly points."""
+        await self._post_weekly_leaderboards_and_reset()
 
     @points.command(name="FAQ", aliases=["faq"])
     async def faqinfo(self, ctx):
@@ -102,7 +130,22 @@ class Points(commands.Cog):
         guild = self.guild_find(ctx)      
         member = guild.get_member(ctx.author.id)
         points = await self.config.member(member).points()
-        embed = discord.Embed(title="Your current balance", description=f"You have **{points}** points!", color=discord.Color.blue())
+
+        members = [m for m in guild.members if not m.bot]
+        points_data = [(m, await self.config.member(m).points()) for m in members if not m.bot]
+        points_data = [entry for entry in points_data if entry[1] != 0]
+        points_data.sort(key=lambda x: x[1], reverse=True)
+        rank = next((i + 1 for i, (m, _) in enumerate(points_data) if m.id == member.id), None)
+
+        total_ranked = len(points_data)
+
+        rank = next((i + 1 for i, (m, _) in enumerate(points_data) if m.id == member.id), None)
+
+        desc = f"You have **{points}** points!"
+        if rank:
+            desc += f"\nYour current rank is **{rank}** / **{total_ranked}**."
+
+        embed = discord.Embed(title="Your current balance", description=desc, color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @points.command(name="rewards")
@@ -203,28 +246,57 @@ class Points(commands.Cog):
         await ctx.send(embed=embed)
 
     @points.command(name="LuckyRoll")
-    @commands.cooldown(1,604800,commands.BucketType.user)
     async def gamba(self, ctx):
-        """Test your luck."""
+        """Gamble your points away."""
         guild = self.guild_find(ctx)      
         member = guild.get_member(ctx.author.id)
         current = await self.config.member(member).points()
+
+        now = int(datetime.datetime.utcnow().timestamp())
+        last_roll = await self.config.member(member).get_raw("last_roll", default=0)
+
+        cooldown = 604800  # 7 days in seconds
+        remaining = cooldown - (now - last_roll)
+
+        if remaining > 0:
+            hours, minutes = divmod(remaining // 60, 60)
+            time_str = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+            await ctx.send(f"You can use `LuckyRoll` in {time_str}.")
+            return
+
         gamba = random.randint(-2500,2500)
         new_points = current + gamba
         await self.config.member(member).points.set(new_points)
-        embed = discord.Embed(title="Lucky Roll", description=f"{ctx.author.mention} {'won' if gamba >= 0 else 'lost'} **{abs(gamba)}** points.", color=discord.Color.gold())
+        await self.config.member(member).set_raw("last_roll", value=now)
+
+        embed = discord.Embed(title="LuckyRoll", description=f"{ctx.author.mention} {'wins' if gamba >= 0 else 'looses'} **{abs(gamba)}** points.", color=discord.Color.gold())
         await ctx.send(embed=embed)
 
     @points.command(name="leaderboard")
     async def leaderboard(self, ctx):
         """Show the general leaderboard."""
         members = ctx.guild.members
-        points_data = [(m, await self.config.member(m).points()) for m in members if not m.bot]
-        
+        points_data = [(m, await self.config.member(m).points()) for m in members if not m.bot]        
+        points_data = [entry for entry in points_data if entry[1] != 0]
+
         sorted_members = sorted(points_data, key=lambda x: x[1], reverse=True)[:10]
         
         leaderboard_text = "\n".join([f"**{i+1}. {m[0].display_name}**   {m[1]} points" for i, m in enumerate(sorted_members)]) or "No data."
         embed = discord.Embed(title="Leaderboard", description=leaderboard_text, color=discord.Color.blue())
+        await ctx.send(embed=embed)
+
+
+    @points.command(name="bottomboard")
+    async def bottomboard(self, ctx):
+        """Show the general leaderboard."""
+        members = ctx.guild.members
+        points_data = [(m, await self.config.member(m).points()) for m in members if not m.bot]
+        points_data = [entry for entry in points_data if entry[1] < 0]
+
+        sorted_members = sorted(points_data, key=lambda x: x[1])[:10]
+        
+        leaderboard_text = "\n".join([f"**{i+1}. {m[0].display_name}**   {m[1]} points" for i, m in enumerate(sorted_members)]) or "No data."
+        embed = discord.Embed(title="Bottomboard", description=leaderboard_text, color=discord.Color.red())
         await ctx.send(embed=embed)
 
     @commands.admin_or_permissions(manage_guild=True)
