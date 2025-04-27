@@ -26,6 +26,7 @@ Points is a cog for [Red Discord Bot](https://docs.discord.red) that manages a p
 - `luckyroll` – Test your luck to win points.
 - `redeem` – Redeem a reward.
 - `rewards` – List available rewards.
+- `leaderboard` – Show the general leaderboard.
 
 ### Admin Commands
 
@@ -34,8 +35,10 @@ Points is a cog for [Red Discord Bot](https://docs.discord.red) that manages a p
 - `setreward` – Set a reward with a required point cost.
 - `removereward` – Remove a reward.
 - `setrewardchannel` – Set the channel for reward redemption notifications.
+- `setweeklychannel` - Set the channel for weekly leaderboard posting.
+- `weeklyleaderboard` - Post weekly leaderboard without resetting it.
+- `ResetWeekly` - Post the weekly leaderboard to the designated channel and reset the weekly leaderboard. 
 - `userbalance` – Check current user points balance.
-- `leaderboard` – Show the general leaderboard.
 
 ## Example Use Case
 
